@@ -1,0 +1,3 @@
+# name,kind,mass_msun,x,y,z,vx,vy,vz   (AU, AU/day) - circular 1 AU orbit
+Sun,star,1.0,0,0,0,0,0,0
+Planet,planet,3.0e-6,1.0,0,0,0,0.017202,0

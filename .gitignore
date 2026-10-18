@@ -1,0 +1,10 @@
+build/
+build-*/
+web/node_modules/
+web/dist/
+web/public/wasm/*.js
+web/public/wasm/*.wasm
+*.o
+.vscode/
+.idea/
+.DS_Store
