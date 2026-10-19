@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { BodyMeta, Gravsim, Kind, ScenarioDefaults } from "./sim";
+import { renderScenarios } from "./scenarios";
 
 const MAX_STEPS_PER_FRAME = 400;   // cost cap: keeps the UI responsive at high speed
 const TRAIL_POINTS = 1500;
@@ -14,7 +15,7 @@ const NAME_COLORS: Record<string, number> = {
 };
 const STAR_PALETTE = [0xffe3a3, 0xffb27a, 0xa3c4ff];
 
-interface Visual { mesh: THREE.Object3D; trail: THREE.Line; trailPos: Float32Array; trailCount: number; label: HTMLDivElement; color: number }
+interface Visual { mesh: THREE.Object3D; trail: THREE.Line; trailPos: Float32Array; trailCount: number; label: HTMLDivElement; color: number; hidden: boolean }
 
 class App {
   renderer = new THREE.WebGLRenderer({ canvas: $("view"), antialias: true });
@@ -29,6 +30,9 @@ class App {
   paused = false;
   last = performance.now();
   frame = 0;
+  active = false;
+  fps = 60;
+  bary = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints([[-.3,0,0],[.3,0,0],[0,-.3,0],[0,.3,0],[0,0,-.3],[0,0,.3]].map((v) => new THREE.Vector3(...v))), new THREE.LineBasicMaterial({ color: 0xffb454 }));
 
   constructor(private sim: Gravsim) {
     this.camera.up.set(0, 0, 1);               // ecliptic north is +z
@@ -39,11 +43,12 @@ class App {
     this.grid = new THREE.GridHelper(20, 20, 0x2a3350, 0x161b2b);
     this.grid.rotation.x = Math.PI / 2;        // GridHelper is XZ by default; we want XY
     this.scene.add(this.grid);
+    this.bary.visible = false;
+    this.scene.add(this.bary);
     this.addStars();
     window.addEventListener("resize", () => this.resize());
     this.resize();
     this.bindUI();
-    this.loadScenario(0);
     requestAnimationFrame((t) => this.tick(t));
   }
 
@@ -67,9 +72,17 @@ class App {
   }
 
   bindUI() {
-    const sel = $<HTMLSelectElement>("scenario");
-    this.sim.scenarios.forEach((s) => sel.add(new Option(s.title, String(s.index))));
-    sel.onchange = () => this.loadScenario(Number(sel.value));
+    const flys = document.querySelectorAll<HTMLElement>(".fly"), tools = document.querySelectorAll<HTMLElement>("[data-tool]");
+    tools.forEach((b) => (b.onclick = () => {
+      const f = $(`fly-${b.dataset.tool}`), open = !f.classList.contains("open");
+      flys.forEach((x) => x.classList.remove("open")); tools.forEach((x) => x.classList.remove("on"));
+      if (open) { f.classList.add("open"); b.classList.add("on"); }
+    }));
+    $<HTMLInputElement>("gridOn").onchange = (e) => { this.grid.visible = (e.target as HTMLInputElement).checked; };
+    $<HTMLInputElement>("baryOn").onchange = (e) => { this.bary.visible = (e.target as HTMLInputElement).checked; };
+    $("viewTop").onclick = () => this.setView(0, -0.01, 1);
+    $("viewSide").onclick = () => this.setView(0, -1, 0.05);
+    $("viewReset").onclick = () => this.setView(0, -14 / 16.6, 9 / 16.6);
     $<HTMLSelectElement>("method").onchange = (e) => this.sim.setMethod(Number((e.target as HTMLSelectElement).value));
     $<HTMLInputElement>("dt").oninput = () => this.applyDt();
     $<HTMLInputElement>("warp").oninput = () => this.updateWarpLabel();
@@ -77,11 +90,17 @@ class App {
     $<HTMLInputElement>("trails").onchange = () => this.updateTrailVisibility();
     $<HTMLInputElement>("labelsOn").onchange = () => this.updateLabelVisibility();
     $<HTMLButtonElement>("pause").onclick = () => {
-      this.paused = !this.paused;
-      $("pause").textContent = this.paused ? "Resume" : "Pause";
+      this.setPaused(!this.paused);
     };
     $<HTMLButtonElement>("reset").onclick = () => { this.sim.reset(); this.clearTrails(); };
   }
+
+  setPaused(p: boolean) { this.paused = p; $("pause").classList.toggle("is-paused", p); }
+  setView(x: number, y: number, z: number) {
+    const d = Math.max(this.camera.position.distanceTo(this.controls.target), 1), t = this.controls.target;
+    this.camera.position.set(t.x + x * d, t.y + y * d, t.z + z * d);
+  }
+  enter(i: number) { this.active = true; this.setPaused(false); this.loadScenario(i); }
 
   get dt() { return this.defaults.dt * 10 ** Number($<HTMLInputElement>("dt").value); }
   get warp() { return this.defaults.warp * 10 ** Number($<HTMLInputElement>("warp").value); }
@@ -98,6 +117,21 @@ class App {
     this.defaults = defaults;
     this.scale = 10 / defaults.viewScale;
     $("desc").textContent = this.sim.scenarios[index].description;
+    $("title").textContent = this.sim.scenarios[index].title;
+    const msun = defaults.timeUnit === "day" ? " M☉" : "";
+    $("massList").innerHTML = "";
+    bodies.forEach((b, i) => {
+      const li = document.createElement("li");
+      li.innerHTML = `<input type="checkbox" checked title="Show / hide" /><b></b><span></span>`;
+      li.querySelector("b")!.textContent = b.name;
+      li.querySelector("span")!.textContent = b.mass.toExponential(2) + msun;
+      li.querySelector("input")!.onchange = (e) => {
+        const v = this.visuals[i]; v.hidden = !(e.target as HTMLInputElement).checked; v.mesh.visible = !v.hidden;
+        this.updateTrailVisibility(); this.updateLabelVisibility();
+      };
+      li.querySelector("b")!.onclick = () => { $<HTMLSelectElement>("follow").value = String(i); };
+      $("massList").appendChild(li);
+    });
     $<HTMLSelectElement>("method").value = String(defaults.method);
     $<HTMLInputElement>("pn").checked = defaults.pn;
     $<HTMLInputElement>("dt").value = "0";
@@ -131,7 +165,7 @@ class App {
       label.className = "label";
       label.textContent = b.name;
       $("labels").appendChild(label);
-      this.visuals.push({ mesh, trail, trailPos, trailCount: 0, label, color });
+      this.visuals.push({ mesh, trail, trailPos, trailCount: 0, label, color, hidden: false });
       void i;
     });
 
@@ -167,8 +201,8 @@ class App {
   }
 
   clearTrails() { for (const v of this.visuals) { v.trailCount = 0; v.trail.geometry.setDrawRange(0, 0); } this.syncBodies(); }
-  updateTrailVisibility() { const on = $<HTMLInputElement>("trails").checked; for (const v of this.visuals) v.trail.visible = on; }
-  updateLabelVisibility() { const on = $<HTMLInputElement>("labelsOn").checked; for (const v of this.visuals) v.label.style.display = on ? "" : "none"; }
+  updateTrailVisibility() { const on = $<HTMLInputElement>("trails").checked; for (const v of this.visuals) v.trail.visible = on && !v.hidden; }
+  updateLabelVisibility() { const on = $<HTMLInputElement>("labelsOn").checked; for (const v of this.visuals) v.label.style.display = on && !v.hidden ? "" : "none"; }
 
   fmtTime(t: number) {
     return this.defaults.timeUnit === "day" ? `${(t / 365.25).toFixed(2)} yr` : `t = ${t.toFixed(3)}`;
@@ -177,6 +211,8 @@ class App {
   tick(now: number) {
     const frameSec = Math.min(0.1, (now - this.last) / 1000);
     this.last = now;
+    if (!this.active) { requestAnimationFrame((t) => this.tick(t)); return; }
+    this.fps += (1 / Math.max(frameSec, 1e-3) - this.fps) * 0.05;
     let limited = false;
     if (!this.paused) {
       const wanted = this.warp * frameSec;
@@ -203,7 +239,7 @@ class App {
       const w = window.innerWidth, h = window.innerHeight, v = new THREE.Vector3();
       for (const vis of this.visuals) {
         v.copy(vis.mesh.position).project(this.camera);
-        const visible = v.z < 1;
+        const visible = v.z < 1 && !vis.hidden;
         vis.label.style.display = visible ? "" : "none";
         vis.label.style.left = `${(v.x * 0.5 + 0.5) * w}px`;
         vis.label.style.top = `${(-v.y * 0.5 + 0.5) * h}px`;
@@ -213,6 +249,7 @@ class App {
     if (this.frame++ % 6 === 0) {
       const d = this.sim.diagnostics();
       $("dTime").textContent = this.fmtTime(d.time);
+      $("fps").textContent = `${Math.round(this.fps)} fps`;
       $("dE").textContent = d.dE.toExponential(2);
       $("dL").textContent = d.dL.toExponential(2);
       $("dEv").textContent = d.evals.toExponential(2);
@@ -225,13 +262,23 @@ class App {
 
 async function main() {
   const status = $("status");
+  const show = (sim: boolean) => { $("listView").hidden = sim; $("simView").hidden = !sim; };
   try {
     const sim = await Gravsim.create();
-    status.textContent = "Physics core: C++20 → WebAssembly";
-    new App(sim);
+    status.hidden = true;
+    renderScenarios(sim.scenarios);
+    const app = new App(sim);
+    const route = () => {
+      const m = location.hash.match(/^#\/sim\/(.+)$/);
+      const i = m ? sim.scenarios.findIndex((s) => s.name === m[1]) : -1;
+      show(i >= 0);
+      if (i >= 0) app.enter(i); else app.active = false;
+    };
+    addEventListener("hashchange", route);
+    route();
   } catch (err) {
-    status.textContent =
-      "Could not load the WebAssembly module. Build it first (scripts/build-wasm.sh) – see README. " + String(err);
+    show(false);
+    status.textContent = "Could not load the WebAssembly module. Build it first (scripts/build-wasm.sh). " + String(err);
   }
 }
 main();

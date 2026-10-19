@@ -7,53 +7,66 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <canvas id="view"></canvas>
-    <div id="labels"></div>
+    <main id="listView">
+      <header class="bar">
+        <a class="brand" href="#/">gravsim</a>
+        <a href="https://github.com/zahraiqb/GravSim" target="_blank" rel="noopener">GitHub</a>
+      </header>
+      <section class="hero">
+        <h1>Scenarios</h1>
+        <p>Pick a system to simulate. The physics runs in C++ compiled to WebAssembly, right in your browser.</p>
+      </section>
+      <p id="status" class="banner">Loading physics core…</p>
+      <div class="tools"><div id="chips"></div><input id="search" type="search" placeholder="Search scenarios" /></div>
+      <div id="cards"></div>
+      <footer>A simplified Newtonian model (optional 1PN correction). Great for exploring, not for predicting real events.</footer>
+    </main>
 
-    <aside id="panel">
-      <h1>gravsim</h1>
-      <p id="status">Loading physics core…</p>
+    <section id="simView" hidden>
+      <canvas id="view"></canvas>
+      <div id="labels"></div>
 
-      <label>Scenario <select id="scenario"></select></label>
-      <p id="desc"></p>
+      <header class="topbar">
+        <a class="back" href="#/" aria-label="Back to scenarios"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>Scenarios</a>
+        <div class="ttl"><h2 id="title"></h2><p id="desc"></p></div>
+        <div class="meters"><span id="dTime"></span><span id="fps"></span></div>
+      </header>
 
-      <label>Integrator
-        <select id="method">
-          <option value="0">Euler (1st order)</option>
-          <option value="1">RK4 (4th order)</option>
-          <option value="2">Leapfrog (2nd, symplectic)</option>
-          <option value="3">Yoshida (4th, symplectic)</option>
-          <option value="4">Dormand–Prince 5(4) adaptive</option>
-        </select>
-      </label>
-      <label>Time step <output id="dtOut"></output>
-        <input id="dt" type="range" min="-2" max="1" step="0.05" value="0" />
-      </label>
-      <label>Speed <output id="warpOut"></output>
-        <input id="warp" type="range" min="-3" max="3" step="0.05" value="0" />
-      </label>
-      <label class="row"><input id="pn" type="checkbox" /> 1PN relativistic corrections</label>
-      <label class="row"><input id="trails" type="checkbox" checked /> Trails</label>
-      <label class="row"><input id="labelsOn" type="checkbox" checked /> Labels</label>
-      <label>Follow <select id="follow"></select></label>
+      <div class="fly" id="fly-time"><h3>Time</h3>
+        <label>Speed <output id="warpOut"></output><input id="warp" type="range" min="-3" max="3" step="0.05" value="0" /></label>
+        <p class="note" id="limited"></p></div>
+      <div class="fly" id="fly-integrator"><h3>Integrator</h3>
+        <label>Method <select id="method">
+          <option value="0">Euler (1st order)</option><option value="1">RK4 (4th order)</option>
+          <option value="2">Leapfrog (2nd, symplectic)</option><option value="3">Yoshida (4th, symplectic)</option>
+          <option value="4">Dormand–Prince 5(4) adaptive</option></select></label>
+        <label>Time step <output id="dtOut"></output><input id="dt" type="range" min="-2" max="1" step="0.05" value="0" /></label>
+        <label class="row"><input id="pn" type="checkbox" /> 1PN relativistic corrections</label></div>
+      <div class="fly" id="fly-camera"><h3>Camera</h3>
+        <label>Follow <select id="follow"></select></label>
+        <div class="btns"><button id="viewTop">Top</button><button id="viewSide">Side</button><button id="viewReset">Reset</button></div></div>
+      <div class="fly" id="fly-masses"><h3>Masses</h3><ul id="massList"></ul></div>
+      <div class="fly" id="fly-graphics"><h3>Graphics</h3>
+        <label class="row"><input id="trails" type="checkbox" checked /> Trails</label>
+        <label class="row"><input id="labelsOn" type="checkbox" checked /> Labels</label>
+        <label class="row"><input id="gridOn" type="checkbox" checked /> Grid</label>
+        <label class="row"><input id="baryOn" type="checkbox" /> Barycenter marker</label></div>
+      <div class="fly" id="fly-diag"><h3>Diagnostics</h3>
+        <table><tr><td>ΔE / E₀</td><td id="dE"></td></tr><tr><td>Δ|L| / L₀</td><td id="dL"></td></tr><tr><td>Force evals</td><td id="dEv"></td></tr></table>
+        <p class="note">Energy drift is the honest test of an integrator. Try Euler vs. Yoshida.</p></div>
 
-      <div class="buttons">
-        <button id="pause">Pause</button>
-        <button id="reset">Reset</button>
-      </div>
-
-      <table id="diag">
-        <tr><td>Time</td><td id="dTime"></td></tr>
-        <tr><td>ΔE / E₀</td><td id="dE"></td></tr>
-        <tr><td>Δ|L| / L₀</td><td id="dL"></td></tr>
-        <tr><td>Force evals</td><td id="dEv"></td></tr>
-      </table>
-      <p class="note" id="limited"></p>
-      <p class="note">
-        Newtonian N-body + optional 1PN (EIH). Energy drift is the honest test of an integrator:
-        try Euler vs. Yoshida. <a href="https://github.com/" id="repo">Source &amp; math on GitHub</a>.
-      </p>
-    </aside>
+      <nav class="dock">
+        <button id="pause" aria-label="Play or pause"><svg class="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg><svg class="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+        <button id="reset" aria-label="Reset"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 3-6.2M4 4v5h5"/></svg></button>
+        <i></i>
+        <button data-tool="time"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2"/></svg><span>Time</span></button>
+        <button data-tool="integrator"><svg viewBox="0 0 24 24"><path d="M3 12c3-8 6-8 9 0s6 8 9 0"/></svg><span>Integrator</span></button>
+        <button data-tool="camera"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="12" rx="2"/><circle cx="12" cy="13" r="3.5"/><path d="M9 7l1.5-2h3L15 7"/></svg><span>Camera</span></button>
+        <button data-tool="masses"><svg viewBox="0 0 24 24"><circle cx="8" cy="14" r="4"/><circle cx="17" cy="8" r="2.5"/></svg><span>Masses</span></button>
+        <button data-tool="graphics"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5"/></svg><span>Graphics</span></button>
+        <button data-tool="diag"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 15l4-4 3 3 5-6"/></svg><span>Energy</span></button>
+      </nav>
+    </section>
 
     <script type="module" src="/src/main.ts"></script>
   </body>
