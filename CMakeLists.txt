@@ -56,7 +56,8 @@ else()
       core/tests/test_kepler.cpp
       core/tests/test_integrators.cpp
       core/tests/test_nbody.cpp
-      core/tests/test_relativity.cpp)
+      core/tests/test_relativity.cpp
+      core/tests/test_scenarios.cpp)
     target_link_libraries(gravsim_tests PRIVATE gravsim_core Catch2::Catch2WithMain)
     list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
     include(Catch)

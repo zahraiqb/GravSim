@@ -4,6 +4,8 @@ const CATEGORY: Record<string, string> = {
   solar_system: "Solar System", solar_system_extended: "Solar System", alpha_centauri: "Stars",
   sgr_a_s2: "Black Holes", binary_black_hole: "Black Holes",
   kepler: "Few-body", figure_eight: "Few-body", pythagorean: "Few-body",
+  big_bang: "Cosmology", astronaut_bh: "Black Holes", kepler16_tatooine: "Exoplanets", trappist1: "Exoplanets",
+  galilean_moons: "Solar System", jupiter_trojans: "Solar System", pluto_charon: "Solar System",
 };
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
 

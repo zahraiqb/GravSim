@@ -1,5 +1,6 @@
 #include "gravsim/scenarios.hpp"
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <sstream>
 #include "gravsim/units.hpp"
@@ -115,11 +116,184 @@ Scenario base(const char* name, const char* title, const char* desc) {
     return sc;
 }
 
+
+// ---------------------------------------------------------------------------------------
+// Extra scenarios. Orbital data are rounded literature values (NASA fact sheets, Agol+2021,
+// Doyle+2011); phases are illustrative unless stated. Good for exploration, not ephemerides.
+constexpr double kKmPerAU = 149597870.7;
+constexpr double kMsunKg = 1.98847e30;
+constexpr double kMearth = 1.0 / 332946.05;  // Earth mass in Msun
+
+struct Rng {  // splitmix64: identical on every platform
+    std::uint64_t s;
+    double u() {
+        s += 0x9E3779B97F4A7C15ull;
+        std::uint64_t z = s;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+        z ^= z >> 31;
+        return static_cast<double>(z >> 11) * (1.0 / 9007199254740992.0);
+    }
+};
+
+Body mk(const char* name, BodyKind k, double m, double radius_km) {
+    Body b;
+    b.name = name; b.kind = k; b.mass = m; b.radius_km = radius_km;
+    return b;
+}
+
+// Add a body orbiting the centre of mass of everything added so far (mu = G (M + m)).
+void add_about_com(System& s, Body b, const Elements& el) {
+    Vec3 r, v;
+    state_from_elements(s.params.G * (s.total_mass() + b.mass), el, r, v);
+    b.pos = s.center_of_mass() + r;
+    b.vel = s.center_of_mass_velocity() + v;
+    s.add_body(b);
+}
+
+bool make_extra(const std::string& name, Scenario& out) {
+    const double G = G_AU_DAY_MSUN;
+    if (name == "big_bang") {
+        out = base("big_bang", "The Big Bang (toy model)",
+                   "400 self-gravitating matter blobs fly outward from a tiny dense ball with a Hubble-like "
+                   "velocity field (G = 1 units). Watch expansion fight gravity and clumps form. A Newtonian "
+                   "toy: no dark energy, radiation or general relativity.");
+        System s;
+        s.params.G = 1.0; s.params.softening = 0.012;
+        Rng rng{2026};
+        const int N = 400;
+        const double R0 = 0.25, H = 0.98 * std::sqrt(2.0 / (R0 * R0 * R0));
+        for (int i = 0; i < N; ++i) {
+            Vec3 x;
+            do { x = Vec3(2 * rng.u() - 1, 2 * rng.u() - 1, 2 * rng.u() - 1); } while (norm2(x) > 1.0);
+            Body b = mk("matter", BodyKind::Star, 1.0 / N, 0.0);
+            b.pos = R0 * x;
+            b.vel = H * b.pos + 0.08 * H * R0 * Vec3(rng.u() - .5, rng.u() - .5, rng.u() - .5);
+            s.add_body(b);
+        }
+        s.move_to_barycenter();
+        out.system = s; out.time_unit = "G=1"; out.method = Method::Leapfrog;
+        out.default_dt = 0.002; out.default_warp = 1.2; out.view_scale = 4.0;
+        return true;
+    }
+    if (name == "astronaut_bh") {
+        out = base("astronaut_bh", "Falling into a black hole",
+                   "An astronaut (seven bodies from feet to head) plunges toward a black hole (G = M = c = 1, "
+                   "horizon r = 2). Newtonian tidal forces stretch the body: spaghettification. Bodies vanish "
+                   "at the horizon (visual only). Real GR near the horizon differs; this is a Newtonian sketch.");
+        System s;
+        s.params.G = 1.0; s.params.c = 1.0; s.params.softening = 0.05;
+        s.add_body(mk("Black hole", BodyKind::BlackHole, 1.0, 2.0));  // radius_km holds r_s (length units)
+        for (int k = 0; k < 7; ++k) {
+            Body b = mk(k == 0 ? "Feet" : k == 6 ? "Head" : "Torso", BodyKind::Other, 0.0, 0.0);
+            b.pos = Vec3(24.0 + (k - 3) * 0.4, 0.0, 0.0);
+            b.vel = Vec3(0.0, 0.04, 0.0);
+            s.add_body(b);
+        }
+        out.system = s; out.time_unit = "G=1"; out.method = Method::DOPRI5;
+        out.default_dt = 0.02; out.default_warp = 5.0; out.view_scale = 28.0;
+        return true;
+    }
+    if (name == "kepler16_tatooine") {
+        out = base("kepler16_tatooine", "Kepler-16b: a real 'Tatooine'",
+                   "A planet orbiting two stars: Kepler-16 A and B (0.69 + 0.20 Msun, P = 41 d) with a "
+                   "Saturn-mass circumbinary world at 0.70 AU (P ~ 229 d). Discovered by Kepler in 2011.");
+        System s = make_binary(G, 0.6897, 0.20255, Elements{0.22431, 0.15944, 0, 0, 0, 0});
+        s.info[0] = {"Kepler-16 A", BodyKind::Star, 451400.0};
+        s.info[1] = {"Kepler-16 B", BodyKind::Star, 157400.0};
+        add_about_com(s, mk("Kepler-16b", BodyKind::Planet, 0.333 / 1047.35, 52700.0),
+                      Elements{0.7048, 0.0069, 0, 0, 0, 40 * DEG});
+        s.move_to_barycenter();
+        out.system = s; out.method = Method::DOPRI5;
+        out.default_dt = 0.2; out.default_warp = 60.0; out.view_scale = 1.0;
+        return true;
+    }
+    if (name == "galilean_moons") {
+        out = base("galilean_moons", "Jupiter and the Galilean moons",
+                   "Io, Europa, Ganymede and Callisto in the 4:2:1 Laplace resonance, with Jupiter's real "
+                   "masses and orbit sizes. Phases set so Io - 3 Europa + 2 Ganymede = 180 degrees.");
+        System s;
+        s.params.G = G;
+        s.add_body(mk("Jupiter", BodyKind::Planet, 1.0 / 1047.3486, 69911.0));
+        struct M { const char* n; double km, kg, rad, e, Mdeg; };
+        const M moons[] = {{"Io", 421800, 8.93e22, 1821.6, 0.0041, 0.0},
+                           {"Europa", 671100, 4.80e22, 1560.8, 0.0094, 0.0},
+                           {"Ganymede", 1070400, 1.482e23, 2634.1, 0.0011, 90.0},
+                           {"Callisto", 1882700, 1.076e23, 2410.3, 0.0074, 200.0}};
+        for (const auto& m : moons)
+            add_orbiting(s, 0, mk(m.n, BodyKind::Other, m.kg / kMsunKg, m.rad), m.km / kKmPerAU, m.e, 0, 0, 0, m.Mdeg);
+        s.move_to_barycenter();
+        out.system = s; out.method = Method::DOPRI5;
+        out.default_dt = 0.05; out.default_warp = 6.0; out.view_scale = 0.0135;
+        return true;
+    }
+    if (name == "trappist1") {
+        out = base("trappist1", "TRAPPIST-1: seven worlds",
+                   "Seven Earth-sized planets packed inside Mercury's orbit around an ultracool red dwarf "
+                   "(0.09 Msun), in a resonant chain. Orbital phases are illustrative.");
+        System s;
+        s.params.G = G;
+        s.add_body(mk("TRAPPIST-1", BodyKind::Star, 0.0898, 82900.0));
+        struct P { const char* n; double a, mE, rE, e; };
+        const P ps[] = {{"b", 0.01154, 1.374, 1.116, 0.006}, {"c", 0.01580, 1.308, 1.097, 0.007},
+                        {"d", 0.02227, 0.388, 0.788, 0.004}, {"e", 0.02925, 0.692, 0.920, 0.009},
+                        {"f", 0.03849, 1.039, 1.045, 0.004}, {"g", 0.04683, 1.321, 1.129, 0.003},
+                        {"h", 0.06189, 0.326, 0.755, 0.005}};
+        int k = 0;
+        for (const auto& p : ps)
+            add_orbiting(s, 0, mk(p.n, BodyKind::Planet, p.mE * kMearth, p.rE * 6371.0), p.a, p.e, 0, 0, 0, 47.0 * k++);
+        s.move_to_barycenter();
+        out.system = s; out.method = Method::DOPRI5;
+        out.default_dt = 0.02; out.default_warp = 12.0; out.view_scale = 0.07;
+        return true;
+    }
+    if (name == "jupiter_trojans") {
+        out = base("jupiter_trojans", "Jupiter's Trojan asteroids",
+                   "Massless asteroids gather 60 degrees ahead (L4, the Greeks) and behind (L5, the Trojans) "
+                   "of Jupiter, trapped by the Sun-Jupiter gravity balance. Jupiter's mass is exact; asteroid "
+                   "orbits are randomised.");
+        System s;
+        Body sun = mk("Sun", BodyKind::Star, 1.0, 695700.0);
+        s.add_body(sun);
+        add_planet(s, kPlanets[4]);
+        const PlanetRow& J = kPlanets[4];
+        Rng rng{7};
+        for (int i = 0; i < 30; ++i) {
+            const bool l4 = i % 2 == 0;
+            const double L = J.L + (l4 ? 60.0 : -60.0) + (rng.u() - .5) * 30.0;
+            add_orbiting(s, 0, mk(l4 ? "Greek" : "Trojan", BodyKind::Other, 0.0, 5.0),
+                         J.a + (rng.u() - .5) * 0.15, 0.02 + 0.08 * rng.u(), J.I + 8.0 * rng.u(), J.Omega,
+                         J.varpi - J.Omega, wrap_deg(L - J.varpi));
+        }
+        s.move_to_barycenter();
+        out.system = s; out.method = Method::Yoshida4;
+        out.default_dt = 2.0; out.default_warp = 1500.0; out.view_scale = 7.0;
+        return true;
+    }
+    if (name == "pluto_charon") {
+        out = base("pluto_charon", "Pluto and Charon: a double dwarf planet",
+                   "Charon is so massive that the pair orbits a point in empty space between them. Pluto's "
+                   "four small moons Styx, Nix, Kerberos and Hydra circle both.");
+        System s = make_binary(G, 1.303e22 / kMsunKg, 1.586e21 / kMsunKg,
+                               Elements{19591.0 / kKmPerAU, 0.0, 0, 0, 0, 0});
+        s.info[0] = {"Pluto", BodyKind::DwarfPlanet, 1188.3};
+        s.info[1] = {"Charon", BodyKind::DwarfPlanet, 606.0};
+        struct M { const char* n; double km, Mdeg; };
+        for (const M& m : {M{"Styx", 42656, 20}, M{"Nix", 48694, 100}, M{"Kerberos", 57783, 200}, M{"Hydra", 64738, 300}})
+            add_about_com(s, mk(m.n, BodyKind::Other, 0.0, 5.0), Elements{m.km / kKmPerAU, 0.0, 0, 0, 0, m.Mdeg * DEG});
+        out.system = s; out.method = Method::DOPRI5;
+        out.default_dt = 0.05; out.default_warp = 8.0; out.view_scale = 0.00048;
+        return true;
+    }
+    return false;
+}
 }  // namespace
 
 std::vector<std::string> scenario_names() {
     return {"solar_system", "solar_system_extended", "alpha_centauri", "sgr_a_s2",
-            "binary_black_hole", "kepler", "figure_eight", "pythagorean"};
+            "binary_black_hole", "kepler", "figure_eight", "pythagorean",
+            "big_bang", "astronaut_bh", "kepler16_tatooine", "galilean_moons", "trappist1",
+            "jupiter_trojans", "pluto_charon"};
 }
 
 bool make_scenario(const std::string& name, Scenario& out) {
@@ -248,7 +422,7 @@ bool make_scenario(const std::string& name, Scenario& out) {
         out.view_scale = 4.0;
         return true;
     }
-    return false;
+    return make_extra(name, out);
 }
 
 bool load_csv(const std::string& path, System& out, std::string& error) {

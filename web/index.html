@@ -7,6 +7,16 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
+    <section id="homeView">
+      <canvas id="pulsar"></canvas>
+      <div class="homeText">
+        <p class="kicker">N-body gravity, in your browser</p>
+        <h1>GravSim</h1>
+        <p class="lead">Explore how gravity shapes the cosmos: planets and moons, binary stars, black holes and the first moments of the universe, simulated with real physics.</p>
+        <a class="cta" href="#/scenarios">EXPLORE SCENARIOS <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+        <small>C++ physics core · WebAssembly · Three.js</small>
+      </div>
+    </section>
     <main id="listView">
       <header class="bar">
         <a class="brand" href="#/">gravsim</a>
@@ -27,7 +37,7 @@
       <div id="labels"></div>
 
       <header class="topbar">
-        <a class="back" href="#/" aria-label="Back to scenarios"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>Scenarios</a>
+        <a class="back" href="#/scenarios" aria-label="Back to scenarios"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>Scenarios</a>
         <div class="ttl"><h2 id="title"></h2><p id="desc"></p></div>
         <div class="meters"><span id="dTime"></span><span id="fps"></span></div>
       </header>
@@ -45,11 +55,12 @@
       <div class="fly" id="fly-camera"><h3>Camera</h3>
         <label>Follow <select id="follow"></select></label>
         <div class="btns"><button id="viewTop">Top</button><button id="viewSide">Side</button><button id="viewReset">Reset</button></div></div>
-      <div class="fly" id="fly-masses"><h3>Masses</h3><ul id="massList"></ul></div>
+      <div class="fly" id="fly-masses"><h3>Masses</h3><p class="note">Drag a slider to scale a body's mass and watch the orbits respond.</p><ul id="massList"></ul></div>
       <div class="fly" id="fly-graphics"><h3>Graphics</h3>
         <label class="row"><input id="trails" type="checkbox" checked /> Trails</label>
         <label class="row"><input id="labelsOn" type="checkbox" checked /> Labels</label>
         <label class="row"><input id="gridOn" type="checkbox" checked /> Grid</label>
+        <label class="row" id="wellsRow"><input id="wellsOn" type="checkbox" /> Gravity wells (rubber-sheet)</label>
         <label class="row"><input id="baryOn" type="checkbox" /> Barycenter marker</label></div>
       <div class="fly" id="fly-diag"><h3>Diagnostics</h3>
         <table><tr><td>ΔE / E₀</td><td id="dE"></td></tr><tr><td>Δ|L| / L₀</td><td id="dL"></td></tr><tr><td>Force evals</td><td id="dEv"></td></tr></table>

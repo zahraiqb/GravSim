@@ -94,6 +94,13 @@ EMSCRIPTEN_KEEPALIVE void gs_set_pn(int on) {
     g_sim->invalidate_cache();
     rebaseline();  // the conserved 1PN energy differs from the Newtonian one
 }
+/// Change body i's mass (Msun or G=1 units). Re-baselines the energy diagnostics.
+EMSCRIPTEN_KEEPALIVE void gs_set_mass(int i, double m) {
+    if (!ok(i) || !(m >= 0.0)) return;
+    g_sim->system().mass[i] = m;
+    g_sim->invalidate_cache();
+    rebaseline();
+}
 EMSCRIPTEN_KEEPALIVE void gs_set_tolerance(double rtol) {
     if (g_sim && rtol > 0.0) g_sim->set_tolerances(rtol, rtol * 1e-2);
 }

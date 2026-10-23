@@ -2,6 +2,8 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { BodyMeta, Gravsim, Kind, ScenarioDefaults } from "./sim";
 import { renderScenarios } from "./scenarios";
+import { Pulsar } from "./pulsar";
+import { glow, skin } from "./skins";
 
 const MAX_STEPS_PER_FRAME = 400;   // cost cap: keeps the UI responsive at high speed
 const TRAIL_POINTS = 1500;
@@ -32,6 +34,14 @@ class App {
   frame = 0;
   active = false;
   fps = 60;
+  cur = 0;
+  pts?: THREE.Points;
+  masses: number[] = [];
+  lightIdx = -1;
+  rs = 0;  // black-hole horizon radius in scenario length units (G=1 scenarios only)
+  applyWells: () => void = () => {};
+  light = new THREE.PointLight(0xffffff, 3, 0, 0);
+  wells = new THREE.Mesh(new THREE.PlaneGeometry(28, 28, 56, 56), new THREE.MeshBasicMaterial({ color: 0x4f7fd0, wireframe: true, transparent: true, opacity: 0.45 }));
   bary = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints([[-.3,0,0],[.3,0,0],[0,-.3,0],[0,.3,0],[0,0,-.3],[0,0,.3]].map((v) => new THREE.Vector3(...v))), new THREE.LineBasicMaterial({ color: 0xffb454 }));
 
   constructor(private sim: Gravsim) {
@@ -45,6 +55,8 @@ class App {
     this.scene.add(this.grid);
     this.bary.visible = false;
     this.scene.add(this.bary);
+    this.wells.visible = false;
+    this.scene.add(this.wells, this.light, new THREE.AmbientLight(0x404868, 1.4));
     this.addStars();
     window.addEventListener("resize", () => this.resize());
     this.resize();
@@ -78,7 +90,14 @@ class App {
       flys.forEach((x) => x.classList.remove("open")); tools.forEach((x) => x.classList.remove("on"));
       if (open) { f.classList.add("open"); b.classList.add("on"); }
     }));
-    $<HTMLInputElement>("gridOn").onchange = (e) => { this.grid.visible = (e.target as HTMLInputElement).checked; };
+    const gw = () => {
+      const w = $<HTMLInputElement>("wellsOn").checked;
+      this.wells.visible = w && !this.pts;
+      this.grid.visible = $<HTMLInputElement>("gridOn").checked && !w;
+    };
+    this.applyWells = gw;
+    $<HTMLInputElement>("gridOn").onchange = gw;
+    $<HTMLInputElement>("wellsOn").onchange = gw;
     $<HTMLInputElement>("baryOn").onchange = (e) => { this.bary.visible = (e.target as HTMLInputElement).checked; };
     $("viewTop").onclick = () => this.setView(0, -0.01, 1);
     $("viewSide").onclick = () => this.setView(0, -1, 0.05);
@@ -92,7 +111,7 @@ class App {
     $<HTMLButtonElement>("pause").onclick = () => {
       this.setPaused(!this.paused);
     };
-    $<HTMLButtonElement>("reset").onclick = () => { this.sim.reset(); this.clearTrails(); };
+    $<HTMLButtonElement>("reset").onclick = () => this.loadScenario(this.cur);
   }
 
   setPaused(p: boolean) { this.paused = p; $("pause").classList.toggle("is-paused", p); }
@@ -112,15 +131,25 @@ class App {
   loadScenario(index: number) {
     for (const v of this.visuals) { this.scene.remove(v.mesh); this.scene.remove(v.trail); v.label.remove(); }
     this.visuals = [];
+    if (this.pts) { this.scene.remove(this.pts); this.pts = undefined; }
     const { bodies, defaults } = this.sim.load(index);
     this.bodies = bodies;
+    this.cur = index;
+    this.masses = bodies.map((b) => b.mass);
+    const many = bodies.length > 40;  // swarm mode: draw as points, no meshes/trails/labels
+    const shown = many ? [] : bodies;
+    const bh = bodies.find((b) => b.kind === Kind.BlackHole);
+    this.rs = defaults.timeUnit === "G=1" && bh ? bh.radiusKm : 0;
+    this.lightIdx = -1;
+    bodies.forEach((b, i) => { if (b.kind === Kind.Star && (this.lightIdx < 0 || b.mass > bodies[this.lightIdx].mass)) this.lightIdx = i; });
+    $("wellsRow").hidden = many;
     this.defaults = defaults;
     this.scale = 10 / defaults.viewScale;
     $("desc").textContent = this.sim.scenarios[index].description;
     $("title").textContent = this.sim.scenarios[index].title;
     const msun = defaults.timeUnit === "day" ? " M☉" : "";
     $("massList").innerHTML = "";
-    bodies.forEach((b, i) => {
+    shown.forEach((b, i) => {
       const li = document.createElement("li");
       li.innerHTML = `<input type="checkbox" checked title="Show / hide" /><b></b><span></span>`;
       li.querySelector("b")!.textContent = b.name;
@@ -130,6 +159,17 @@ class App {
         this.updateTrailVisibility(); this.updateLabelVisibility();
       };
       li.querySelector("b")!.onclick = () => { $<HTMLSelectElement>("follow").value = String(i); };
+      if (b.mass > 0) {
+        const r = document.createElement("input");
+        r.type = "range"; r.min = "-1"; r.max = "1.5"; r.step = "0.05"; r.value = "0"; r.title = "Scale this body's mass (x0.1 to x30)";
+        r.style.gridColumn = "1 / -1";
+        r.oninput = () => {
+          const m = b.mass * 10 ** Number(r.value);
+          this.masses[i] = m; this.sim.setMass(i, m);
+          li.querySelector("span")!.textContent = m.toExponential(2) + msun + ` (×${(10 ** Number(r.value)).toFixed(2)})`;
+        };
+        li.appendChild(r);
+      }
       $("massList").appendChild(li);
     });
     $<HTMLSelectElement>("method").value = String(defaults.method);
@@ -140,18 +180,26 @@ class App {
     this.updateWarpLabel();
 
     let starIdx = 0;
-    bodies.forEach((b, i) => {
+    shown.forEach((b, i) => {
       const color = NAME_COLORS[b.name] ?? (b.kind === Kind.Star ? STAR_PALETTE[starIdx++ % 3] : b.kind === Kind.Planet ? 0x6aa9ff : 0xffffff);
-      const r = 0.06 * (1 + 0.25 * Math.log10(1 + b.mass / 1e-6));
-      let mesh: THREE.Object3D;
+      const r = b.kind === Kind.Star ? 0.07 : b.kind === Kind.BlackHole ? (this.rs > 0 ? this.rs * this.scale : 0.07)
+        : Math.min(0.11, 0.035 + 0.012 * Math.log10(1 + b.mass / 1e-7));
+      const mesh = new THREE.Group();
       if (b.kind === Kind.BlackHole) {
-        const g = new THREE.Group();
-        g.add(new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16), new THREE.MeshBasicMaterial({ color: 0x000000 })));
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(r * 1.9, r * 0.18, 8, 48), new THREE.MeshBasicMaterial({ color: 0xff9a3c }));
-        g.add(ring);
-        mesh = g;
+        mesh.add(new THREE.Mesh(new THREE.SphereGeometry(r, 32, 20), new THREE.MeshBasicMaterial({ color: 0x000000 })));
+        const disc = new THREE.Mesh(new THREE.RingGeometry(r * 1.4, r * 3.2, 64), new THREE.MeshBasicMaterial({ color: 0xff9a3c, side: THREE.DoubleSide, transparent: true, opacity: 0.8 }));
+        disc.rotation.x = 0.35;  // accretion disc, tilted toward the viewer
+        mesh.add(disc, glow(0xff8a3c, r * 9, 0.5));
+      } else if (b.kind === Kind.Star) {
+        const map = b.name === "Sun" ? skin("Sun") : null;
+        mesh.add(new THREE.Mesh(new THREE.SphereGeometry(r, 32, 20), new THREE.MeshBasicMaterial(map ? { map } : { color })), glow(color, r * 11, 0.9));
       } else {
-        mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14), new THREE.MeshBasicMaterial({ color }));
+        mesh.add(new THREE.Mesh(new THREE.SphereGeometry(r, 32, 20), new THREE.MeshStandardMaterial({ map: skin(b.name), roughness: 1 })));
+        if (b.name === "Saturn") for (const [a0, a1, col] of [[1.45, 1.95, 0xd9c7a0], [2.05, 2.5, 0xb7a27a]] as const) {
+          const ring = new THREE.Mesh(new THREE.RingGeometry(r * a0, r * a1, 64), new THREE.MeshBasicMaterial({ color: col, side: THREE.DoubleSide, transparent: true, opacity: 0.75 }));
+          ring.rotation.x = 0.47;  // 26.7 degree ring tilt
+          mesh.add(ring);
+        }
       }
       this.scene.add(mesh);
       const trailPos = new Float32Array(TRAIL_POINTS * 3);
@@ -169,21 +217,66 @@ class App {
       void i;
     });
 
+    if (many) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(bodies.length * 3), 3));
+      this.pts = new THREE.Points(g, new THREE.PointsMaterial({ size: 2.4, sizeAttenuation: false, color: 0xffe0b0, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+      this.pts.frustumCulled = false;
+      this.scene.add(this.pts);
+      $("massList").innerHTML = `<li><span>${bodies.length} particles (swarm mode)</span></li>`;
+    }
+    $<HTMLInputElement>("labelsOn").checked = bodies.length <= 12;
     const follow = $<HTMLSelectElement>("follow");
     follow.innerHTML = "";
     follow.add(new Option("Barycenter", "-1"));
-    bodies.forEach((b, i) => follow.add(new Option(b.name, String(i))));
+    shown.forEach((b, i) => follow.add(new Option(b.name, String(i))));
     this.camera.position.set(0, -14, 9);
     this.controls.target.set(0, 0, 0);
+    this.applyWells();
     this.syncBodies();
     this.updateTrailVisibility();
     this.updateLabelVisibility();
   }
 
   syncBodies() {
-    const p = this.sim.positions();
-    this.visuals.forEach((v, i) => v.mesh.position.set(p[3 * i] * this.scale, p[3 * i + 1] * this.scale, p[3 * i + 2] * this.scale));
+    const p = this.sim.positions(), k = this.scale;
+    this.visuals.forEach((v, i) => v.mesh.position.set(p[3 * i] * k, p[3 * i + 1] * k, p[3 * i + 2] * k));
+    if (this.pts) {
+      const a = this.pts.geometry.getAttribute("position") as THREE.BufferAttribute;
+      for (let j = 0; j < a.count * 3; j++) (a.array as Float32Array)[j] = p[j] * k;
+      a.needsUpdate = true;
+    }
     return p;
+  }
+
+  /** Per-frame extras that depend on fresh positions: lighting, horizon absorption, gravity wells. */
+  postSync(p: Float64Array) {
+    const k = this.scale, L = this.lightIdx;
+    if (L >= 0) this.light.position.set(p[3 * L] * k, p[3 * L + 1] * k, p[3 * L + 2] * k);
+    else this.light.position.copy(this.camera.position);
+    if (this.rs > 0) {
+      const b = this.bodies.findIndex((x) => x.kind === Kind.BlackHole);
+      this.visuals.forEach((v, i) => {
+        if (v.hidden || this.bodies[i].mass > 0 || i === b) return;
+        const d = Math.hypot(p[3 * i] - p[3 * b], p[3 * i + 1] - p[3 * b + 1], p[3 * i + 2] - p[3 * b + 2]);
+        if (d < this.rs) { v.hidden = true; v.mesh.visible = false; v.trail.visible = false; }  // crossed the horizon
+      });
+    }
+    if (this.wells.visible) this.updateWells(p);
+  }
+
+  /** Rubber-sheet picture of the potential: depth ~ -sum_i w_i / r_i, w_i = (m_i/m_max)^0.35 (illustrative scaling). */
+  updateWells(p: Float64Array) {
+    const n = this.bodies.length, k = this.scale, mx = Math.max(...this.masses, 1e-30);
+    const w = this.masses.map((m) => Math.pow(m / mx, 0.35));
+    const a = this.wells.geometry.getAttribute("position") as THREE.BufferAttribute;
+    for (let v = 0; v < a.count; v++) {
+      const x = a.getX(v), y = a.getY(v);
+      let z = 0;
+      for (let i = 0; i < n; i++) { const dx = x - p[3 * i] * k, dy = y - p[3 * i + 1] * k; z -= w[i] / Math.sqrt(dx * dx + dy * dy + 0.09); }
+      a.setZ(v, Math.max(-6, 1.1 * z));
+    }
+    a.needsUpdate = true;
   }
 
   pushTrails(p: Float64Array) {
@@ -225,6 +318,7 @@ class App {
       }
     }
     const p = this.syncBodies();
+    this.postSync(p);
 
     // camera follow
     const f = Number($<HTMLSelectElement>("follow").value);
@@ -261,24 +355,29 @@ class App {
 }
 
 async function main() {
-  const status = $("status");
-  const show = (sim: boolean) => { $("listView").hidden = sim; $("simView").hidden = !sim; };
+  const show = (v: "home" | "list" | "sim") => { $("homeView").hidden = v !== "home"; $("listView").hidden = v !== "list"; $("simView").hidden = v !== "sim"; };
+  const pulsar = new Pulsar($<HTMLCanvasElement>("pulsar"));
+  let sim: Gravsim | undefined;
+  let app: App | undefined;
+  const route = () => {
+    const h = location.hash, m = h.match(/^#\/sim\/(.+)$/);
+    const i = m && sim ? sim.scenarios.findIndex((s) => s.name === m[1]) : -1;
+    const view = i >= 0 ? "sim" : m || h.startsWith("#/scenarios") ? "list" : "home";
+    show(view);
+    pulsar.active = view === "home";
+    if (app) app.active = view === "sim";
+    if (i >= 0 && app) app.enter(i);
+  };
+  addEventListener("hashchange", route);
+  route();
   try {
-    const sim = await Gravsim.create();
-    status.hidden = true;
+    sim = await Gravsim.create();
+    $("status").hidden = true;
     renderScenarios(sim.scenarios);
-    const app = new App(sim);
-    const route = () => {
-      const m = location.hash.match(/^#\/sim\/(.+)$/);
-      const i = m ? sim.scenarios.findIndex((s) => s.name === m[1]) : -1;
-      show(i >= 0);
-      if (i >= 0) app.enter(i); else app.active = false;
-    };
-    addEventListener("hashchange", route);
+    app = new App(sim);
     route();
   } catch (err) {
-    show(false);
-    status.textContent = "Could not load the WebAssembly module. Build it first (scripts/build-wasm.sh). " + String(err);
+    $("status").textContent = "Could not load the WebAssembly module. Build it first (scripts/build-wasm.sh). " + String(err);
   }
 }
 main();

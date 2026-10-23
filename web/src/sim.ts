@@ -23,6 +23,7 @@ export interface GravsimModule {
   _gs_set_method(m: number): void;
   _gs_set_dt(dt: number): void;
   _gs_set_pn(on: number): void;
+  _gs_set_mass(i: number, m: number): void;
   _gs_set_tolerance(rtol: number): void;
   _gs_advance(T: number): number;
   _gs_positions(): number;
@@ -104,6 +105,7 @@ export class Gravsim {
   setMethod(m: number) { this.m._gs_set_method(m); }
   setDt(dt: number) { this.m._gs_set_dt(dt); }
   setPN(on: boolean) { this.m._gs_set_pn(on ? 1 : 0); }
+  setMass(i: number, m: number) { this.m._gs_set_mass(i, m); }
   advance(T: number): number { return this.m._gs_advance(T); }
 
   /** Copy of current positions as [x0,y0,z0,x1,...] (length unit of the scenario). */
